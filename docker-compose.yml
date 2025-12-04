@@ -3,8 +3,9 @@ version: '3.8'
 services:
   db:
     build:
-      context: .
+      context: .  # Залишаємо крапку, бо ваш Dockerfile копіює дані з папки ../data
       dockerfile: ./db/Dockerfile
+    restart: always  # <-- Додано: перезапуск при збоях
     ports:
       - "5432:5432"
     environment:
@@ -13,10 +14,15 @@ services:
       POSTGRES_DB: lviv_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    deploy:          # <-- Додано: захист пам'яті для БД
+      resources:
+        limits:
+          memory: 1G
 
   model-api:
     build:
       context: ./model_service
+    restart: always  # <-- Додано
     ports:
       - "8000:8000"
     environment:
@@ -28,6 +34,20 @@ services:
         limits:
           cpus: '1.5'
           memory: '2G'
+
+  interface-app:
+    build:
+      context: ./interface_service
+    restart: always
+    ports:
+      - "8501:8501"
+    depends_on:
+      - model-api
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: '1G'
 
 
 volumes:
