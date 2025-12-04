@@ -14,5 +14,21 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  model-api:
+    build:
+      context: ./model_service
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/lviv_db
+    depends_on:
+      - db
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: '2G'
+
+
 volumes:
   postgres_data:
