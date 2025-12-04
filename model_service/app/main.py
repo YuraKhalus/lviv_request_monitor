@@ -70,3 +70,13 @@ async def get_training_metrics():
     except RuntimeError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+@app.get("/performance", tags=["Metrics"])
+async def get_performance_data():
+    """
+    Returns actual vs. predicted data for a sample of the test set.
+    """
+    try:
+        performance_data = model_manager.get_performance()
+        return performance_data
+    except RuntimeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
