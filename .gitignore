@@ -1,0 +1,39 @@
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.log
+
+# IDEs
+.vscode/
+.idea/
+
+# Data
+# Ignore generated cleaned data
+data/sample_optimized.csv
+data/cleaned_appeals.csv
+
+# Docker
+# Ignore PostgreSQL data volume
+postgres_data/
+# Ignore Docker build caches
+.dockerignore
+
+# Models (generated artifacts)
+# This will ignore any saved model files, e.g., joblib, pickle, h5, pt
+model_service/app/models/*.joblib
+model_service/app/models/*.pkl
+model_service/app/models/*.h5
+model_service/app/models/*.pt
+
+# Other common ignores
+*.bak
+*.swp
+*~
