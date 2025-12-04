@@ -1,6 +1,5 @@
 import streamlit as st
 import requests
-import pandas as pd
 import json
 
 # --- Page Configuration ---
@@ -11,24 +10,80 @@ st.set_page_config(
 )
 
 # --- Constants ---
-MODEL_API_URL = "http://model-api:8000/predict"
+PREDICT_API_URL = "http://model-api:8000/predict"
+ACTUAL_API_URL = "http://model-api:8000/actual"
+
+# CRUCIAL FIX: Ensure district names match the database exactly
 DISTRICTS = [
-    "Галицький", 
-    "Залізничний", 
-    "Личаківський", 
-    "Сихівський", 
-    "Франківський", 
-    "Шевченківський"
+    "Галицький район", 
+    "Залізничний район", 
+    "Личаківський район", 
+    "Сихівський район", 
+    "Франківський район", 
+    "Шевченківський район"
 ]
 TOP_CATEGORIES = [
-    "Несправний ліфт", 
-    "Відкритий люк", 
-    "Витік води", 
-    "Відсутнє вуличне освітлення", 
-    "Ями на дорозі"
+    "Аварійна ситуація з системою електропостачання у житловому будинку", 
+    "Порушення правил паркування",
+    "Питання оплати та надання послуг",
+    "Несправний (зупинений) ліфт житлового будинку",
+    "Відсутня подача холодної води у житловому будинку",
+    "Скарга на комунальні підприємства",
+    "Порушення графіку руху громадського транспорту",
+    "Ями, вибоїни в асфальтовому покритті проїжджої частини",
+    "Відсутнє гаряче водопостачання (недавно) житлового будинку",
+    "Інші порушення правил перевезення громадським транспортом",
+    "Застрягання кабіни ліфта",
+    "Аварійна ситуація з системою електропостачання у квартирі",
+    "Інші проблеми з порядком на дорогах та громадських територіях",
+    "Водій проігнорував зупинку громадського транспорту",
+    "Відсутнє опалення по стояку житлового будинку",
+    "Відсутнє опалення по житловому будинку",
+    "Відсутнє зовнішнє освітлення",
+    "Інші проблеми по обслуговуванню будинку",
+    "Прорив водопровідних мереж (витік на вулиці)",
+    "Не прибрана прибудинкова територія від сміття чи листя"
+
+
 ]
 OTHER_CATEGORY = "Інше (ввести вручну)"
 
+def fetch_and_display_results(payload):
+    """Fetches predictions and actuals, then displays them."""
+    try:
+        # --- Get Prediction ---
+        predict_response = requests.post(PREDICT_API_URL, data=json.dumps(payload))
+        predict_response.raise_for_status()
+        predictions = predict_response.json().get("predictions", {})
+
+        st.subheader("🤖 Результати прогнозу (днів до виконання)")
+        cols = st.columns(len(predictions))
+        max_days, model_with_max_days = 0, ""
+
+        for idx, (model_name, days) in enumerate(predictions.items()):
+            with cols[idx]:
+                st.metric(label=model_name, value=f"{days:.1f} днів")
+            if days > max_days:
+                max_days = days
+                model_with_max_days = model_name
+        
+        st.success(f"**Безпечна оцінка:** Найбільш песимістичний прогноз ({model_with_max_days}) становить **{max_days:.1f} днів**.", icon="🛡️")
+
+        # --- Get Actual Case ---
+        actual_response = requests.post(ACTUAL_API_URL, data=json.dumps(payload))
+        actual_response.raise_for_status()
+        actual_data = actual_response.json()
+        actual_days = actual_data.get("actual_days")
+
+        if actual_days is not None:
+            st.info(f"**Для довідки:** Випадковий реальний випадок з такими ж параметрами було вирішено за **{int(actual_days)} днів**.", icon="📚")
+        else:
+            st.warning("Не знайдено реальних історичних випадків для порівняння.", icon="⚠️")
+
+    except requests.exceptions.RequestException as e:
+        st.error(f"Не вдалося підключитися до сервісу моделей. Перевірте, чи він запущений. Помилка: {e}")
+    except Exception as e:
+        st.error(f"Сталася неочікувана помилка: {e}")
 
 # --- Main App ---
 def predict_page():
@@ -37,10 +92,7 @@ def predict_page():
 
     with st.form("prediction_form"):
         st.subheader("Деталі звернення")
-        
-        # Input fields
         district = st.selectbox("Оберіть район:", DISTRICTS)
-        
         category_choice = st.selectbox("Оберіть категорію:", TOP_CATEGORIES + [OTHER_CATEGORY])
         
         custom_category = ""
@@ -50,45 +102,14 @@ def predict_page():
         submitted = st.form_submit_button("Отримати прогноз")
 
     if submitted:
-        # Determine the final category
         final_category = custom_category if category_choice == OTHER_CATEGORY else category_choice
-        
         if not final_category:
             st.warning("Будь ласка, введіть або оберіть категорію.")
             return
 
-        with st.spinner("Отримуємо прогноз від моделей..."):
-            try:
-                payload = {
-                    "district": district,
-                    "category": final_category
-                }
-                response = requests.post(MODEL_API_URL, data=json.dumps(payload))
-                response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-
-                predictions = response.json().get("predictions", {})
-                
-                st.subheader("Результати прогнозу (днів до виконання)")
-                cols = st.columns(len(predictions))
-                
-                max_days = 0
-                model_with_max_days = ""
-
-                # Display metrics
-                for idx, (model_name, days) in enumerate(predictions.items()):
-                    with cols[idx]:
-                        st.metric(label=model_name, value=f"{days:.1f} днів")
-                    if days > max_days:
-                        max_days = days
-                        model_with_max_days = model_name
-
-                # Highlight the most pessimistic prediction
-                st.info(f"**Безпечна оцінка:** Найбільш песимістичний прогноз ({model_with_max_days}) становить **{max_days:.1f} днів**.", icon="🛡️")
-
-            except requests.exceptions.RequestException as e:
-                st.error(f"Не вдалося підключитися до сервісу моделей. Перевірте, чи він запущений. Помилка: {e}")
-            except Exception as e:
-                st.error(f"Сталася неочікувана помилка: {e}")
+        payload = {"district": district, "category": final_category}
+        with st.spinner("Отримуємо прогноз та шукаємо схожі випадки..."):
+            fetch_and_display_results(payload)
 
 def about_page():
     st.title("Про проект")

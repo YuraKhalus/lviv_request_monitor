@@ -1,7 +1,8 @@
 import os
 import pandas as pd
-import psycopg2
 import joblib
+import logging
+from sqlalchemy import create_engine, text
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
@@ -10,120 +11,129 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 from . import schemas
 
-# Define the path for saving model artifacts
-ARTIFACTS_PATH = "model_artifacts.joblib"
+# --- Configuration ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Define paths for saving model artifacts
+MODELS_PATH = "models.joblib"
+COLUMNS_PATH = "model_columns.joblib"
+METRICS_PATH = "metrics.joblib"
 
 class ModelManager:
     def __init__(self):
-        self.artifacts = None
-        # Load artifacts on initialization if they exist
-        if os.path.exists(ARTIFACTS_PATH):
-            self.load_artifacts()
+        self.db_engine = create_engine(os.getenv("DATABASE_URL", "sqlite:///:memory:"))
+        self.models = None
+        self.model_columns = None
+        self.metrics = None
+        self.load_artifacts()
 
     def load_artifacts(self):
-        """Loads models, columns, and metrics from a file."""
+        """Loads models, columns, and metrics from their respective files."""
         try:
-            self.artifacts = joblib.load(ARTIFACTS_PATH)
-            print("Model artifacts loaded successfully.")
+            if os.path.exists(MODELS_PATH):
+                self.models = joblib.load(MODELS_PATH)
+            if os.path.exists(COLUMNS_PATH):
+                self.model_columns = joblib.load(COLUMNS_PATH)
+            if os.path.exists(METRICS_PATH):
+                self.metrics = joblib.load(METRICS_PATH)
+            if self.models and self.model_columns:
+                logging.info("Model artifacts loaded successfully.")
         except Exception as e:
-            print(f"Error loading artifacts: {e}")
-            self.artifacts = None
+            logging.error(f"Error loading artifacts: {e}")
+            self.models = self.model_columns = self.metrics = None
 
     def train(self):
-        """
-        Connects to the database, fetches data, trains models,
-        and saves them along with metrics and feature columns.
-        """
-        db_url = os.getenv("DATABASE_URL")
-        if not db_url:
-            raise ValueError("DATABASE_URL environment variable not set.")
-
-        print("Starting model training...")
+        """Fetches data, trains models, and saves artifacts."""
+        logging.info("Starting model training...")
         try:
-            conn = psycopg2.connect(db_url)
-            df = pd.read_sql_query("SELECT * FROM appeals", conn)
-            conn.close()
+            with self.db_engine.connect() as conn:
+                df = pd.read_sql_query(text("SELECT * FROM appeals"), conn)
         except Exception as e:
-            print(f"Database connection failed: {e}")
+            logging.error(f"Database connection failed: {e}")
             return
 
-        print("Data fetched successfully. Preprocessing...")
+        logging.info("Data fetched successfully. Preprocessing...")
         df.dropna(subset=['days_to_resolve', 'district', 'category'], inplace=True)
         
-        features = ['district', 'category']
-        target = 'days_to_resolve'
-        
-        X = pd.get_dummies(df[features], prefix_sep='_')
-        y = df[target]
+        X = pd.get_dummies(df[['district', 'category']], prefix_sep='_')
+        y = df['days_to_resolve']
 
-        # Save the column order and names after one-hot encoding
+        # CRUCIAL: Save the column names and order
         feature_columns = X.columns.tolist()
-        
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
+        joblib.dump(feature_columns, COLUMNS_PATH)
+        logging.info(f"Saved {len(feature_columns)} feature columns to {COLUMNS_PATH}")
 
-        models = {
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        trained_models = {
             "LinearRegression": LinearRegression(),
             "RandomForest": RandomForestRegressor(max_depth=10, n_estimators=20, random_state=42),
             "XGBoost": XGBRegressor(max_depth=5, n_estimators=20, random_state=42)
         }
-        
-        metrics = {"mae": {}, "rmse": {}}
+        calculated_metrics = {"mae": {}, "rmse": {}}
 
-        for name, model in models.items():
-            print(f"Training {name}...")
+        for name, model in trained_models.items():
             model.fit(X_train, y_train)
             preds = model.predict(X_test)
-            metrics["mae"][name] = mean_absolute_error(y_test, preds)
-            metrics["rmse"][name] = np.sqrt(mean_squared_error(y_test, preds))
-            print(f"{name} - MAE: {metrics['mae'][name]:.4f}, RMSE: {metrics['rmse'][name]:.4f}")
+            calculated_metrics["mae"][name] = mean_absolute_error(y_test, preds)
+            calculated_metrics["rmse"][name] = np.sqrt(mean_squared_error(y_test, preds))
 
-        # Save all artifacts together
-        artifacts_to_save = {
-            "models": models,
-            "feature_columns": feature_columns,
-            "metrics": metrics,
-        }
-        joblib.dump(artifacts_to_save, ARTIFACTS_PATH)
-        print("Model training complete. Artifacts saved.")
-        
-        # Reload artifacts into memory after training
+        joblib.dump(trained_models, MODELS_PATH)
+        joblib.dump(calculated_metrics, METRICS_PATH)
+        logging.info("Model training complete. Artifacts saved.")
         self.load_artifacts()
 
     def predict(self, input_data: schemas.AppealInput) -> schemas.PredictionOutput:
-        """
-        Generates predictions for a given input using the loaded models.
-        """
-        if self.artifacts is None:
-            raise RuntimeError("Models are not trained or loaded. Please train first via the /train endpoint.")
+        """Generates predictions, ensuring feature alignment with robust logging."""
+        if not self.models or not self.model_columns:
+            raise RuntimeError("Models or columns not loaded. Please train first via the /train endpoint.")
 
-        # Create a DataFrame from the input
-        df_input = pd.DataFrame([input_data.dict(exclude={'registrationDate'})])
+        logging.info(f"Raw prediction input: {input_data.dict()}")
+        input_df = pd.DataFrame([input_data.dict(exclude={'registrationDate'})])
         
-        # Preprocess the input data (One-Hot Encode)
-        X_input = pd.get_dummies(df_input, prefix_sep='_')
+        input_encoded = pd.get_dummies(input_df, prefix_sep='_')
+        logging.info(f"Input columns after one-hot encoding: {input_encoded.columns.tolist()}")
 
-        # Align columns with the training data
-        # This adds missing columns (with value 0) and removes extra ones.
-        X_input_aligned = X_input.reindex(columns=self.artifacts["feature_columns"], fill_value=0)
+        # CRUCIAL FIX: Align columns with the training data
+        input_aligned = input_encoded.reindex(columns=self.model_columns, fill_value=0)
+        
+        if input_aligned.sum().sum() == 0:
+            logging.warning("No matching features found after alignment. Prediction will be based on model bias only.")
 
         predictions = {}
-        for name, model in self.artifacts["models"].items():
-            pred = model.predict(X_input_aligned)[0]
+        for name, model in self.models.items():
+            pred = model.predict(input_aligned)[0]
             predictions[name] = float(pred)
             
+        logging.info(f"Returning predictions: {predictions}")
         return schemas.PredictionOutput(predictions=predictions)
 
     def get_metrics(self) -> schemas.MetricsOutput:
-        """
-        Returns the evaluation metrics from the last training run.
-        """
-        if self.artifacts is None or "metrics" not in self.artifacts:
+        """Returns the evaluation metrics from the last training run."""
+        if not self.metrics:
             raise RuntimeError("No metrics found. Please train models first.")
-        
-        return schemas.MetricsOutput(
-            mae=self.artifacts["metrics"]["mae"],
-            rmse=self.artifacts["metrics"]["rmse"]
-        )
+        return schemas.MetricsOutput(mae=self.metrics["mae"], rmse=self.metrics["rmse"])
 
+    def get_actual_case(self, district: str, category: str) -> dict:
+        """Queries the database for a single, random historical case using fuzzy matching for category."""
+        cat_pattern = f"%{category}%"
+        logging.info(f"Fetching actual case for District: '{district}', Category Pattern: '{cat_pattern}'")
+        try:
+            with self.db_engine.connect() as conn:
+                query = text("""
+                    SELECT days_to_resolve FROM appeals 
+                    WHERE district = :district AND category ILIKE :cat_pattern
+                    ORDER BY random() 
+                    LIMIT 1
+                """)
+                result = conn.execute(query, {"district": district, "cat_pattern": cat_pattern}).fetchone()
+                
+                if result:
+                    logging.info(f"Found actual case with {result[0]} days to resolve.")
+                    return {"actual_days": float(result[0])}
+                else:
+                    logging.warning("No actual case found for the given criteria.")
+                    return {"actual_days": None}
+        except Exception as e:
+            logging.error(f"DB query for actual case failed: {e}")
+            return {"actual_days": None}

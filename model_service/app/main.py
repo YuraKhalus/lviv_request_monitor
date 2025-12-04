@@ -44,6 +44,21 @@ async def predict_resolution_time(appeal_input: schemas.AppealInput):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
+@app.post("/actual", tags=["Prediction"])
+async def get_actual_resolution_time(appeal_input: schemas.AppealInput):
+    """
+    Fetches a random, real historical case from the DB matching the input criteria.
+    """
+    try:
+        actual_case = model_manager.get_actual_case(
+            district=appeal_input.district,
+            category=appeal_input.category
+        )
+        return actual_case
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+
+
 @app.get("/metrics", response_model=schemas.MetricsOutput, tags=["Metrics"])
 async def get_training_metrics():
     """

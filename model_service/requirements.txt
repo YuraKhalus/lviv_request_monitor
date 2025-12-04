@@ -6,3 +6,4 @@ xgboost
 psycopg2-binary
 joblib
 pydantic
+sqlalchemy
