@@ -117,9 +117,10 @@ class ModelManager:
         cat_pattern = f"%{category}%"
         try:
             with self.db_engine.connect() as conn:
-                query = text("SELECT days_to_resolve FROM appeals WHERE district = :district AND category ILIKE :cat_pattern ORDER BY random() LIMIT 1")
+                query = text('SELECT days_to_resolve FROM appeals WHERE district = :district AND category ILIKE :cat_pattern ORDER BY random() LIMIT 1')
                 result = conn.execute(query, {"district": district, "cat_pattern": cat_pattern}).fetchone()
                 return {"actual_days": float(result[0]) if result else None}
         except Exception as e:
             logging.error(f"DB query for actual case failed: {e}")
             return {"actual_days": None}
+

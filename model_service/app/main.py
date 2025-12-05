@@ -80,3 +80,4 @@ async def get_performance_data():
         return performance_data
     except RuntimeError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
